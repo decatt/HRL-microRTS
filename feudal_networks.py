@@ -23,17 +23,17 @@ def embedding(states, num_env):
     for state in states:
         z = torch.tensor([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
         z[0] = (state.permute((2, 0, 1))[11] * state.permute((2, 0, 1))[15]).sum()
-        z[0] = (state.permute((2, 0, 1))[11] * state.permute((2, 0, 1))[16]).sum()
-        z[0] = (state.permute((2, 0, 1))[11] * state.permute((2, 0, 1))[17]).sum()
-        z[0] = (state.permute((2, 0, 1))[11] * state.permute((2, 0, 1))[18]).sum()
-        z[0] = (state.permute((2, 0, 1))[11] * state.permute((2, 0, 1))[19]).sum()
-        z[0] = (state.permute((2, 0, 1))[11] * state.permute((2, 0, 1))[20]).sum()
-        z[0] = (state.permute((2, 0, 1))[12] * state.permute((2, 0, 1))[15]).sum()
-        z[0] = (state.permute((2, 0, 1))[12] * state.permute((2, 0, 1))[16]).sum()
-        z[0] = (state.permute((2, 0, 1))[12] * state.permute((2, 0, 1))[17]).sum()
-        z[0] = (state.permute((2, 0, 1))[12] * state.permute((2, 0, 1))[18]).sum()
-        z[0] = (state.permute((2, 0, 1))[12] * state.permute((2, 0, 1))[19]).sum()
-        z[0] = (state.permute((2, 0, 1))[12] * state.permute((2, 0, 1))[20]).sum()
+        z[1] = (state.permute((2, 0, 1))[11] * state.permute((2, 0, 1))[16]).sum()
+        z[2] = (state.permute((2, 0, 1))[11] * state.permute((2, 0, 1))[17]).sum()
+        z[3] = (state.permute((2, 0, 1))[11] * state.permute((2, 0, 1))[18]).sum()
+        z[4] = (state.permute((2, 0, 1))[11] * state.permute((2, 0, 1))[19]).sum()
+        z[5] = (state.permute((2, 0, 1))[11] * state.permute((2, 0, 1))[20]).sum()
+        z[6] = (state.permute((2, 0, 1))[12] * state.permute((2, 0, 1))[15]).sum()
+        z[7] = (state.permute((2, 0, 1))[12] * state.permute((2, 0, 1))[16]).sum()
+        z[8] = (state.permute((2, 0, 1))[12] * state.permute((2, 0, 1))[17]).sum()
+        z[9] = (state.permute((2, 0, 1))[12] * state.permute((2, 0, 1))[18]).sum()
+        z[10] = (state.permute((2, 0, 1))[12] * state.permute((2, 0, 1))[19]).sum()
+        z[11] = (state.permute((2, 0, 1))[12] * state.permute((2, 0, 1))[20]).sum()
         zs[n] = z
         n = n + 1
     return zs
@@ -70,7 +70,7 @@ torch_seeds = 0
 gamma = 0.99
 learning_rate = 2.5e-4
 num_steps = 1024
-total_steps = 25600000
+total_steps = 51200000
 n_minibatch = 4
 anneal = True
 c = 64
@@ -89,24 +89,31 @@ max_grad_norm = 0.5
 batch_size = int(num_envs * num_steps)
 minibatch_size = int(batch_size // n_minibatch)
 
+date = time.strftime("%Y%m%d", time.localtime())
+
 device = torch.device('cuda:0' if torch.cuda.is_available() and use_gpu else 'cpu')
-path = './model/microrts_fun_0830_16_worker.pth'
-path_pt = './model/microrts_fun_0830_16_worker.pt'
-path_manager = './model/microrts_fun_0830_16_manager.pth'
-path_pt_manager = './model/microrts_fun_0830_16_manager.pt'
-record_path = './record/microrts_ppo_0711_10.txt'
+path = './model/microrts_fun_'+date+'_16_worker.pth'
+path_pt = './model/microrts_fun_'+date+'_16_worker.pt'
+path_manager = './model/microrts_fun_'+date+'_16_manager.pth'
+path_pt_manager = './model/microrts_fun_'+date+'_16_manager.pt'
+record_path = './record/microrts_fun_'+date+'_16.txt'
+path_hp = './model/microrts_fun_'+date+'_16_worker_hp.pth'
+path_pt_hp = './model/microrts_fun_'+date+'_16_worker_hp.pt'
+path_manager_hp = './model/microrts_fun_'+date+'_16_manager_hp.pth'
+path_pt_manager_hp = './model/microrts_fun_'+date+'_16_manager_hp.pt'
+
 random.seed(seed)
 np.random.seed(seed)
 torch.manual_seed(seed)
 
 ais = []
 for i in range(num_envs):
-    ais.append(microrts_ai.workerRushAI)
+    ais.append(microrts_ai.coacAI)
 
 init_seeds()
 envs = MicroRTSVecEnv(
     num_envs=num_envs,
-    max_steps=2000,
+    max_steps=10000,
     render_theme=2,
     ai2s=ais,
     frame_skip=10,
@@ -157,6 +164,8 @@ outcomes = collections.deque(maxlen=500)
 outcomes_record = []
 rewards_record = []
 
+hp_outcome = 0.0
+
 for update in range(starting_update, num_updates + 1):
     if anneal:
         frac = 1.0 - (update - 1.0) / num_updates
@@ -177,7 +186,13 @@ for update in range(starting_update, num_updates + 1):
                 goals[step] = current_goal
                 log_probs_manager[step//c] = manager_log_probs
                 values_manager[step//c] = manager.get_value(obs[step]).flatten()
-
+        else:
+            for index in range(num_envs):
+                if ds[index]:
+                    current_goal, manager_log_probs, _ = manager.get_goal(obs[step], num_envs)
+                    goals[step] = current_goal
+                    log_probs_manager[step // c] = manager_log_probs
+                    values_manager[step // c] = manager.get_value(obs[step]).flatten()
         with torch.no_grad():
             values[step] = worker.get_value(obs[step], current_goal).flatten()
             action, log_prob, _, invalid_action_masks[step] = worker.get_action(obs[step], current_goal, num_envs,
@@ -193,14 +208,22 @@ for update in range(starting_update, num_updates + 1):
                     else:
                         outcomes.append(0)
 
-        if len(embedded_obs) == 2:
+        if len(embedded_obs) == 2 and embedded_obs[0] is not embedded_obs[1]:
             inner_rewards = get_inner_reward(current_goal, embedded_obs[0], embedded_obs[1], num_envs)
         else:
             inner_rewards = torch.zeros((num_envs,))
 
-        rewards[step], next_done = rs.view(-1) + inner_rewards, torch.Tensor(ds).to(device)
-        rewards_manager[step // c] = rewards_manager[step // c] + rewards[step]
+        rewards[step], next_done = rs.view(-1) + 10*inner_rewards, torch.Tensor(ds).to(device)
+        rewards_manager[step // c] = rewards_manager[step // c] + rs.view(-1).to(device)
     if len(outcomes) > 0:
+        average_outcomes = sum(outcomes) / len(outcomes)
+        if average_outcomes > hp_outcome:
+            torch.save(worker, path_hp)
+            torch.save(worker.state_dict(), path_pt_hp)
+            torch.save(manager, path_manager_hp)
+            torch.save(manager.state_dict(), path_pt_manager_hp)
+            hp_outcome = average_outcomes
+            print(hp_outcome)
         outcomes_record.append(sum(outcomes) / len(outcomes))
         rewards_record.append(sum(step_rewards) / len(step_rewards))
 

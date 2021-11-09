@@ -11,6 +11,7 @@ import time
 import torch.nn as nn
 import matplotlib.pyplot as plt
 import collections
+import gc
 
 
 def get_units_number(unit_type, bef_obs, ind_obs):
@@ -44,12 +45,15 @@ def get_inner_reward(goal, v_zs, v_zs_, num_env):
     res = torch.zeros((num_env,))
     for i_env in range(num_env):
         vector_a = goal[i_env] - v_zs[i_env]
-        vector_b = goal[i_env] - v_zs_[i_env]
+        vector_b = v_zs[i_env] - v_zs_[i_env]
         num = torch.mm(vector_a.view((1, 12)), vector_b.view((12, 1)))
         denom = torch.norm(vector_a) * torch.norm(vector_b)
-        cos = num / denom
-        sim = 0.5 + 0.5 * cos
-        res[i_env] = sim[0]*torch.norm(v_zs_[i_env] - v_zs[i_env])
+        if denom == 0:
+            res[i_env] = 0
+        else:
+            cos = num / denom
+            sim = cos
+            res[i_env] = sim[0]*torch.norm(v_zs_[i_env] - v_zs[i_env])
     return res
 
 
@@ -70,10 +74,10 @@ torch_seeds = 0
 gamma = 0.99
 learning_rate = 2.5e-4
 num_steps = 1024
-total_steps = 51200000
+total_steps = 128000000
 n_minibatch = 4
 anneal = True
-c = 64
+c = 16
 manager_learn = True
 
 lr = lambda f: f * learning_rate
@@ -89,18 +93,17 @@ max_grad_norm = 0.5
 batch_size = int(num_envs * num_steps)
 minibatch_size = int(batch_size // n_minibatch)
 
-date = time.strftime("%Y%m%d", time.localtime())
-
 device = torch.device('cuda:0' if torch.cuda.is_available() and use_gpu else 'cpu')
-path = './model/microrts_fun_'+date+'_16_worker.pth'
-path_pt = './model/microrts_fun_'+date+'_16_worker.pt'
-path_manager = './model/microrts_fun_'+date+'_16_manager.pth'
-path_pt_manager = './model/microrts_fun_'+date+'_16_manager.pt'
-record_path = './record/microrts_fun_'+date+'_16.txt'
-path_hp = './model/microrts_fun_'+date+'_16_worker_hp.pth'
-path_pt_hp = './model/microrts_fun_'+date+'_16_worker_hp.pt'
-path_manager_hp = './model/microrts_fun_'+date+'_16_manager_hp.pth'
-path_pt_manager_hp = './model/microrts_fun_'+date+'_16_manager_hp.pt'
+date = time.strftime("%Y%m%d%H", time.localtime())
+path = './model/microrts_fun_'+date+'_10_worker.pth'
+path_pt = './model/microrts_fun_'+date+'_10_worker.pt'
+path_manager = './model/microrts_fun_'+date+'_10_manager.pth'
+path_pt_manager = './model/microrts_fun_'+date+'_10_manager.pt'
+record_path = './record/microrts_fun_'+date+'_10.txt'
+path_hp = './model/microrts_fun_'+date+'_10_worker_hp.pth'
+path_pt_hp = './model/microrts_fun_'+date+'_10_worker_hp.pt'
+path_manager_hp = './model/microrts_fun_'+date+'_10_manager_hp.pth'
+path_pt_manager_hp = './model/microrts_fun_'+date+'_10_manager_hp.pt'
 
 random.seed(seed)
 np.random.seed(seed)
@@ -117,9 +120,15 @@ envs = MicroRTSVecEnv(
     render_theme=2,
     ai2s=ais,
     frame_skip=10,
-    map_path="maps/16x16/basesWorkers16x16.xml",
+    map_path="maps/10x10/basesWorkers10x10.xml",
     reward_weight=np.array([10.0, 1.0, 1.0, 0.2, 1.0, 4.0])
 )
+# build worker 1 090604
+# resource 1 090611
+# attack 1 090619
+# build barracks units 090701
+
+
 envs = MicroRTSStatsRecorder(envs, gamma)
 envs = VecMonitor(envs)
 envs = VecPyTorch(envs, device)
@@ -137,7 +146,7 @@ gae_lambda = 0.95
 manager_optimizer = optim.Adam(manager.parameters(), lr=learning_rate, eps=1e-5)
 worker_optimizer = optim.Adam(worker.parameters(), lr=learning_rate, eps=1e-5)
 num_steps_manager = num_steps//c
-obs_manager = torch.zeros((num_steps_manager, num_envs) + envs.observation_space.shape).to(device)
+obs_manager = torch.zeros((num_steps_manager, num_envs) + (12,)).to(device)
 goals_manager = torch.zeros((num_steps_manager, num_envs) + (12,)).to(device)
 rewards_manager = torch.zeros((num_steps_manager, num_envs)).to(device)
 values_manager = torch.zeros((num_steps_manager, num_envs)).to(device)
@@ -153,7 +162,8 @@ dones = torch.zeros((num_steps, num_envs)).to(device)
 values = torch.zeros((num_steps, num_envs)).to(device)
 invalid_action_masks = torch.zeros((num_steps, num_envs) + (envs.action_space.nvec.sum(),)).to(device)
 embedded_obs = collections.deque(maxlen=2)
-inner_rewards = 0
+inner_rewards = torch.zeros((num_envs,))
+inner_rewards_weight = 10
 
 batch_size_manager = num_steps_manager*num_envs
 minibatch_size_manager = int(batch_size_manager // n_minibatch)
@@ -172,48 +182,45 @@ for update in range(starting_update, num_updates + 1):
         lrnow = lr(frac)
         worker_optimizer.param_groups[0]['lr'] = lrnow
         manager_optimizer.param_groups[0]['lr'] = lrnow
-    current_goal = torch.zeros(1, 12)
+    current_goal = torch.zeros((num_envs, 12)).to(device)
     for step in range(0, num_steps):
         envs.render()
         global_step += 1 * num_envs
         obs[step] = next_obs
-        embedded_obs.append(embedding(obs[step], num_envs))
+        zt = embedding(obs[step], num_envs)
+        embedded_obs.append(zt)
         dones[step] = next_done
 
         if step % c == 0 or step == 0:
             with torch.no_grad():
-                current_goal, manager_log_probs, _ = manager.get_goal(obs[step], num_envs)
+                obs_manager[step//c] = zt
+                current_goal, manager_log_probs, _ = manager.get_goal(zt, num_envs)
                 goals[step] = current_goal
+
                 log_probs_manager[step//c] = manager_log_probs
-                values_manager[step//c] = manager.get_value(obs[step]).flatten()
+                values_manager[step//c] = manager.get_value(zt).flatten()
         else:
             for index in range(num_envs):
                 if ds[index]:
-                    current_goal, manager_log_probs, _ = manager.get_goal(obs[step], num_envs)
+                    current_goal, manager_log_probs, _ = manager.get_goal(zt, num_envs)
                     goals[step] = current_goal
                     log_probs_manager[step // c] = manager_log_probs
-                    values_manager[step // c] = manager.get_value(obs[step]).flatten()
+                    values_manager[step // c] = manager.get_value(zt).flatten()
         with torch.no_grad():
+            current_goal = torch.round(current_goal)
             values[step] = worker.get_value(obs[step], current_goal).flatten()
+
             action, log_prob, _, invalid_action_masks[step] = worker.get_action(obs[step], current_goal, num_envs,
                                                                                 envs=envs)
             actions[step] = action.T
             log_probs[step] = log_prob
             next_obs, rs, ds, infos = envs.step(action.T)
-            for index in range(num_envs):
-                step_rewards.append(rs[index].numpy()[0])
-                if ds[index]:
-                    if get_units_number(11, obs[step], index) > get_units_number(12, obs[step], index):
-                        outcomes.append(1)
-                    else:
-                        outcomes.append(0)
 
-        if len(embedded_obs) == 2 and embedded_obs[0] is not embedded_obs[1]:
+        if len(embedded_obs) == 2 and (0 != (embedded_obs[0]!=embedded_obs[1]).sum()):
             inner_rewards = get_inner_reward(current_goal, embedded_obs[0], embedded_obs[1], num_envs)
         else:
             inner_rewards = torch.zeros((num_envs,))
-
-        rewards[step], next_done = rs.view(-1) + 10*inner_rewards, torch.Tensor(ds).to(device)
+        rewards[step], next_done = rs.view(-1) + inner_rewards_weight*inner_rewards, torch.Tensor(ds).to(device)
         rewards_manager[step // c] = rewards_manager[step // c] + rs.view(-1).to(device)
     if len(outcomes) > 0:
         average_outcomes = sum(outcomes) / len(outcomes)
@@ -247,7 +254,8 @@ for update in range(starting_update, num_updates + 1):
             returns_manager = advantages_manager + values_manager
         else:
             returns = torch.zeros_like(rewards).to(device)
-            for t in reversed(range(num_steps)):
+            for t in reversed(range(
+                    num_steps)):
                 if t == num_steps - 1:
                     next_non_terminal = 1.0 - next_done
                     next_return = last_value
@@ -258,7 +266,7 @@ for update in range(starting_update, num_updates + 1):
                 advantages = returns - values
 
         b_obs = obs.reshape((-1,) + envs.observation_space.shape)
-        b_obs_manager = obs_manager.reshape((-1,) + envs.observation_space.shape)
+        b_obs_manager = obs_manager.reshape((-1,) + (12,))
         b_goals = goals.reshape((-1,) + (12,))
         b_log_probs = log_probs.reshape(-1)
         b_log_probs_manager = log_probs_manager.reshape(-1)
@@ -358,20 +366,30 @@ for update in range(starting_update, num_updates + 1):
             nn.utils.clip_grad_norm_(worker.parameters(), max_grad_norm)
             worker_optimizer.step()
 
-    if update % 100 == 0:
+    del b_obs, b_obs_manager, b_values_manager, b_returns_manager, b_values, b_returns, b_goals, \
+        b_log_probs_manager, b_log_probs, b_actions, b_advantages, b_advantages_manager, b_invalid_action_masks
+
+    gc.collect()
+
+    if update % 64 == 0:
+        date = time.strftime("%Y%m%d%H", time.localtime())
+        path = './model/microrts_fun_' + date + '_10_worker.pth'
+        path_pt = './model/microrts_fun_' + date + '_10_worker.pt'
+        path_manager = './model/microrts_fun_' + date + '_10_manager.pth'
+        path_pt_manager = './model/microrts_fun_' + date + '_10_manager.pt'
+        record_path = './record/microrts_fun_' + date + '_10.txt'
         torch.save(worker, path)
         torch.save(worker.state_dict(), path_pt)
         torch.save(manager, path_manager)
         torch.save(manager.state_dict(), path_pt_manager)
+        with open(record_path, "w") as f:
+            f.write(str(rewards_record))
+            f.write("\r\n")
+            f.write(str(outcomes_record))
 
-    if (time.time() - start_time) > 20 * 60 * 60:
+    if (time.time() - start_time) > 72 * 60 * 60:
         print('all game: ' + str(update))
         break
-
-with open(record_path, "w") as f:
-    f.write(str(rewards_record))
-    f.write("\r\n")
-    f.write(str(outcomes_record))
 
 
 fig = plt.figure()

@@ -1,4 +1,5 @@
 import numpy as np
+import torch
 from gym_microrts import microrts_ai
 from gym_microrts.envs.vec_env import MicroRTSGridModeVecEnv
 from numpy.random import choice
@@ -11,7 +12,7 @@ env = MicroRTSGridModeVecEnv(
     num_bot_envs=1,
     max_steps=2000,
     render_theme=2,
-    ai2s=[microrts_ai.coacAI for _ in range(1)],
+    ai2s=[microrts_ai.workerRushAI for _ in range(1)],
     map_path="maps/16x16/basesWorkers16x16.xml",
     reward_weight=np.array([10.0, 1.0, 1.0, 0.2, 1.0, 4.0])
 )
@@ -91,13 +92,19 @@ for i in range(10000):
             sample(atpm[29:sum(env.action_space.nvec[1:])]),  # attack_target parameter
         ]
         # state 1：if worker near resource, move to resource and harvest
+        gs = torch.Tensor(obs[0])
+        workers = gs.permute((2, 0, 1))[11] * gs.permute((2, 0, 1))[17]
+        resource_workers = gs.permute((2, 0, 1))[11] * gs.permute((2, 0, 1))[17] * gs.permute((2, 0, 1))[6]
+        worker_without_resource = workers - resource_workers
         x = source_unit % 16
         y = source_unit // 16
         pos = np.array([x, y])
         target = [-1, -1]
         if atpm[5] == 1:
-            action[5] = 2
-        elif obs[0].reshape(-1, 27)[source_unit][17] == 1 and obs[0].reshape(-1, 27)[source_unit][5] == 1:
+            action[1] = 5
+        elif atpm[3] == 1:
+            action[1] = 3
+        elif worker_without_resource.reshape(-1)[source_unit] == 1:
             if atpm[2] == 1:
                 action[1] = 2
             else:
@@ -109,7 +116,7 @@ for i in range(10000):
                 else:
                     target = source2
 
-        elif obs[0].reshape(-1, 27)[source_unit][17] == 1 and obs[0].reshape(-1, 27)[source_unit][6] == 1:
+        elif resource_workers.reshape(-1)[source_unit] == 1:
             if atpm[3] == 1:
                 action[1] = 3
             else:
@@ -128,5 +135,5 @@ for i in range(10000):
         actions.append(action)
     next_obs, reward, done, info = env.step([actions])
     zs = embedding(next_obs, 16)
-    time.sleep(0.1)
+    time.sleep(0.01)
 env.close()

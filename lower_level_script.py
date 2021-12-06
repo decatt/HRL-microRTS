@@ -41,17 +41,22 @@ def get_default_action(unit, action_temp):
 
 def move_to_target(x, y, target, action, action_temp):
     move_parameter = action_temp[6:10]
+    d = -1
     if action_temp[1] == 1:
-        action[1] = 1
+        # action[1] = 1
         if target[0] > x and move_parameter[1] == 1:
             action[2] = 1
+            d = 1
         if target[1] > y and move_parameter[2] == 1:
             action[2] = 2
+            d = 2
         if target[0] < x and move_parameter[3] == 1:
             action[2] = 3
+            d = 3
         if target[1] < y and move_parameter[0] == 1:
             action[2] = 0
-    return action
+            d = 0
+    return action, d
 
 
 def auto_attack(units: [int], action_mask):
@@ -170,7 +175,7 @@ def force_harvest_resource(gs: torch.Tensor, worker: int, action_temp):
     # actions = []
     x = worker % 16
     y = worker // 16
-    if workers[y][x] ==1:
+    if workers[y][x] == 1:
         action = get_default_action(worker, action_temp)
         target = (2, 2)
         if resource_workers[y][x] == 1:
@@ -205,3 +210,38 @@ def force_harvest_resource(gs: torch.Tensor, worker: int, action_temp):
         force_action = False
         action = []
     return action, force_action
+
+
+def move_to_target_and_act(gs: torch.Tensor, unit, target, action_temp, size):
+    workers = gs.permute((2, 0, 1))[11] * gs.permute((2, 0, 1))[17]
+    barracks = gs.permute((2, 0, 1))[11] * gs.permute((2, 0, 1))[16]
+    u_x = unit % size
+    u_y = unit // size
+    t_x = target % size
+    t_y = target // size
+    action = get_default_action(unit, action_temp)
+    unit_por = gs[u_y][u_x]
+    action, d = move_to_target(u_x, u_y, (t_x, t_y), action, action_temp)
+    if not near_target(u_x, u_y, t_x, t_y):
+        if unit_por[15] != 1 and unit_por[14] != 1:
+            action[1] = 1
+    if action_temp[5] == 1:  # attack
+        action[1] = 5
+    elif action_temp[3] == 1:  # return
+        action[1] = 3
+    elif action_temp[2] == 1 and u_x < 5 and u_y < 5:  # harvest
+        action[1] = 2
+    elif action_temp[4] == 1 and ((u_y, u_x) == (0, 2) or (u_y, u_x) == (0, 4) or (u_y, u_x) == (1, 3)) and barracks.sum() < 1 and unit_por[17] == 1:
+        action[1] = 4
+        if (u_y, u_x) == (0, 2):
+            action[5] = 1
+        if (u_y, u_x) == (0, 4):
+            action[5] = 3
+        if (u_y, u_x) == (1, 3):
+            action[5] = 0
+    elif action_temp[4] and unit_por[16] == 1:
+        action[1] = 4
+        action[6] = 6
+    elif action_temp[4] and unit_por[15] == 1 and workers.sum()<4:
+        action[1] = 4
+    return action

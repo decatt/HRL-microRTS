@@ -23,16 +23,12 @@ class CategoricalMasked(Categorical):
         p_log_p = torch.where(self.masks, p_log_p, torch.tensor(0.).to(device))
         return -p_log_p.sum(-1)
 
-    def deterministic(self):
-        p_log_p = self.probs
-        p_log_p = torch.where(self.masks, p_log_p, torch.tensor(0.).to(device))
-        # res = torch.tensor([torch.tensor([torch.argmax(distribution) for distribution in p_log_p])])
-        res = []
-        for distribution in p_log_p:
-            d = torch.argmax(distribution)
-            res.append(d)
-        res = torch.tensor(res)
-        return res
+    def deterministic(self, sample_shape=torch.Size()):
+        if not isinstance(sample_shape, torch.Size):
+            sample_shape = torch.Size(sample_shape)
+        probs_2d = self.probs.reshape(-1, self._num_events)
+        samples_2d = torch.multinomial(probs_2d, sample_shape.numel(), True).T
+        return samples_2d.reshape(self._extended_shape(sample_shape))
 
 
 def gae_adv(gae, rewards, num_steps, next_done, last_value, dones, values):

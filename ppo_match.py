@@ -38,7 +38,7 @@ torch.manual_seed(seed)
 
 ais = []
 for i in range(num_envs):
-    ais.append(microrts_ai.naiveMCTSAI)
+    ais.append(microrts_ai.coacAI)
 
 init_seeds()
 envs = MicroRTSVecEnv(

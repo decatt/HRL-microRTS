@@ -4,9 +4,9 @@ import numpy as np
 from gym_microrts.envs.vec_env import MicroRTSVecEnv
 from gym_microrts import microrts_ai
 from env_wrapper import VecMonitor, VecPyTorch, MicroRTSStatsRecorder
-from GNNAgent import Worker
+from GNNAgent import Worker, Supervisor
 from numpy.random import choice
-from dimension_reduction import get_selected_node_vector
+from dimension_reduction import get_selected_node_vector, get_round_imf
 from lower_level_script import force_harvest_resource
 import seaborn as sns
 import sys
@@ -38,27 +38,38 @@ seed = 0
 
 num_envs = 1
 
-data = '2021110909' # winning rate 0.17
-
 device = torch.device('cuda:0' if torch.cuda.is_available() and True else 'cpu')
-path = './model/microrts_ppo_' + data + '_16_worker.pth'
-path_pt = './model/microrts_ppo_' + data + '_16_worker.pt'
+# path = './model/microrts_ppo_' + data + '_16_worker.pth'
+path_pt = './model/microrts_GNN_ppo_2021112100_10_worker.pt'
 random.seed(seed)
 np.random.seed(seed)
 torch.manual_seed(seed)
 
+# 2021112109
+# tiamat 0.79
+# coach AI 0.04
+# worker rush 0.36
+
+
 ais = []
 for i in range(num_envs):
-    ais.append(microrts_ai.coacAI)
+    ais.append(microrts_ai.naiveMCTSAI)
+
+size = 8
+map_path = "maps/8x8/basesWorkers8x8.xml"
+if size == 10:
+    map_path = "maps/10x10/basesWorkers10x10.xml"
+elif size == 16:
+    map_path = "maps/16x16/basesWorkers16x16.xml"
 
 init_seeds()
 envs = MicroRTSVecEnv(
     num_envs=num_envs,
-    max_steps=5000,
+    max_steps=1500,
     render_theme=2,
     ai2s=ais,
     frame_skip=10,
-    map_path="maps/16x16/basesWorkers16x16.xml",
+    map_path=map_path,
     reward_weight=np.array([10.0, 1.0, 1.0, 0.2, 1.0, 4.0])
 )
 envs = MicroRTSStatsRecorder(envs, gamma)
@@ -69,9 +80,11 @@ next_obs = envs.reset()
 worker = Worker(envs).to(device)
 
 worker.load_state_dict(torch.load(path_pt, map_location=device))
+# sup = Supervisor().to(device)
+
+# sup.load_state_dict(torch.load('./model/microrts_GNNppo_2021111707_10_sup.pt', map_location=device))
 
 all_rewards = 0
-size = 16
 
 build_barracks = np.zeros(5000)
 build_worker = np.zeros(5000)
@@ -87,7 +100,7 @@ op_attack_pos = np.zeros((size, size))
 op_move_pos = np.zeros((size, size))
 s = 0
 
-tittle = 'GNN against worker rush in 16*16'
+tittle = 'GNN against worker rush in ' + str(size) + 'x' + str(size)
 
 outcomes = []
 
@@ -96,8 +109,10 @@ for games in range(100):
         s = s + 1
         envs.render()
         obs = next_obs
-        graphs = torch.zeros((num_envs, 54))
+        graphs = torch.zeros((num_envs, 80))
         selected_units = torch.zeros((num_envs, size * size))
+        round_imfs = torch.zeros((num_envs, 7, 7, 27))
+        masks = torch.zeros((num_envs, 4))
         force_action = False
         for i in range(num_envs):
             action_unit_mask = np.array(envs.vec_client.getUnitLocationMasks()).reshape(num_envs, -1)[i]
@@ -106,12 +121,18 @@ for games in range(100):
                 graphs[i] = get_selected_node_vector(selected_unit, next_obs[i], size)
             else:
                 selected_unit = 0
-                graphs[i] = torch.zeros((54,))
+                graphs[i] = torch.zeros((80,))
             selected_units[i][selected_unit] = 1
+            round_imf = get_round_imf(3, size, selected_unit, next_obs[i])
+            round_imfs[0] = round_imf
+
         if not force_action:
             with torch.no_grad():
+                # action = worker.get_determinate_action(graphs.to(device), num_envs, selected_units, envs=envs)
                 action, _, _, mask = worker.get_action(graphs.to(device), num_envs, selected_units, envs=envs)
-
+        # d, _, _, _ = sup.get_action(round_imfs.to(device), masks=mask.permute((1, 0))[106:110].permute((1, 0)))
+        # action[2] = d.T
+        # mask = torch.zeros((num_envs, size*size))
         action = action.T
 
         next_obs, rs, ds, infos = envs.step(action)
@@ -145,7 +166,6 @@ for games in range(100):
                 outcomes.append(1)
             else:
                 outcomes.append(0)
-            print(outcomes[-1])
             break
     print("\r", end="")
     print("Progress: {}%: ".format(games), "▋" * (games // 2), end="")
@@ -190,5 +210,4 @@ ax1.legend()
 ax2.legend()
 plt.show()
 
-print('end')
 print('end')

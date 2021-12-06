@@ -33,7 +33,7 @@ def init_seeds(torch_seed=0, seed=0):
         torch.backends.cudnn.benchmark = False
 
 
-size = 10
+size = 8
 test_ai = False
 use_gpu = True
 seed = 0
@@ -62,20 +62,30 @@ minibatch_size = int(batch_size // n_minibatch)
 
 device = torch.device('cuda:0' if torch.cuda.is_available() and use_gpu else 'cpu')
 date = time.strftime("%Y%m%d%H", time.localtime())
-path = './model/microrts_fun_'+date+'_16_worker.pth'
-path_pt = './model/microrts_fun_'+date+'_16_worker.pt'
-record_path = './record/microrts_fun_'+date+'_16.txt'
-path_hp = './model/microrts_fun_'+date+'_16_worker_hp.pth'
-path_pt_hp = './model/microrts_fun_'+date+'_16_worker_hp.pt'
 
 random.seed(seed)
 np.random.seed(seed)
 torch.manual_seed(seed)
 
 ais = []
+
+
 for i in range(num_envs):
     ais.append(microrts_ai.coacAI)
 
+"""
+for i in range(5):
+    ais.append(microrts_ai.coacAI)
+
+for i in range(5, 10):
+    ais.append(microrts_ai.workerRushAI)
+
+for i in range(10, 15):
+    ais.append(microrts_ai.lightRushAI)
+
+for i in range(num_envs):
+    ais.append(microrts_ai.tiamat)
+"""
 init_seeds()
 envs = MicroRTSVecEnv(
     num_envs=num_envs,
@@ -83,7 +93,7 @@ envs = MicroRTSVecEnv(
     render_theme=2,
     ai2s=ais,
     frame_skip=10,
-    map_path="maps/10x10/basesWorkers10x10.xml",
+    map_path="maps/8x8/basesWorkers8x8.xml",
     reward_weight=np.array([10.0, 1.0, 1.0, 0.2, 1.0, 4.0])
 )
 
@@ -92,17 +102,19 @@ envs = VecMonitor(envs)
 envs = VecPyTorch(envs, device)
 
 worker = Worker(envs).to(device)
+#path_ptc = './model/microrts_GNN_ppo_2021112016_10_worker.pt'
+#worker.load_state_dict(torch.load(path_ptc, map_location=device))
 
 global_step = 0
 start_time = time.time()
 next_obs = envs.reset()
 next_done = torch.zeros(num_envs).to(device)
-num_updates = total_steps // batch_size
+num_updates = total_steps // batch_size # 128000000/8
 starting_update = 1
 gae_lambda = 0.95
 worker_optimizer = optim.Adam(worker.parameters(), lr=learning_rate, eps=1e-5)
 
-obs = torch.zeros((num_steps, num_envs, 54)).to(device)
+obs = torch.zeros((num_steps, num_envs, 80)).to(device)
 all_selected_units = torch.zeros((num_steps, num_envs, size*size)).to(device)
 actions = torch.zeros((num_steps, num_envs) + envs.action_space.shape).to(device)
 log_probs = torch.zeros((num_steps, num_envs)).to(device)
@@ -129,31 +141,19 @@ for update in range(starting_update, num_updates + 1):
     for step in range(0, num_steps):
         envs.render()
         global_step += 1 * num_envs
-        graphs = torch.zeros((num_envs, 54))
+        graphs = torch.zeros((num_envs, 80))
         selected_units = torch.zeros((num_envs, size*size))
 
         for i in range(num_envs):
-            """
-            graph = dict_graph(next_obs[i], size)
             action_unit_mask = np.array(envs.vec_client.getUnitLocationMasks()).reshape(num_envs, -1)[i]
             if sum(action_unit_mask) > 0:
                 selected_unit = sample(action_unit_mask)
-                if selected_unit == 86:
-                    print('!')
-                graphs[i] = torch.cat((get_node_vector(selected_unit, graph, size), graph[selected_unit]))
+                graphs[i] = get_selected_node_vector(selected_unit, next_obs[i], size)
             else:
                 selected_unit = 0
-                graphs[i] = torch.zeros((54,))
-            """
-            action_unit_mask = np.array(envs.vec_client.getUnitLocationMasks()).reshape(num_envs, -1)[i]
-            if sum(action_unit_mask) > 0:
-                selected_unit = sample(action_unit_mask)
-                graphs[i] = get_selected_node_vector(selected_unit, next_obs[i], 10)
-            else:
-                selected_unit = 0
-                graphs[i] = torch.zeros((54,))
+                graphs[i] = torch.zeros((80,))
             selected_units[i][selected_unit] = 1
-
+        bef_obs = next_obs
         all_selected_units[step] = selected_units
         obs[step] = graphs
         dones[step] = next_done
@@ -167,8 +167,16 @@ for update in range(starting_update, num_updates + 1):
             next_obs, rs, ds, infos = envs.step(action.T)
             for index in range(num_envs):
                 step_rewards.append(rs[index].numpy()[0])
+                if ds[index]:
+                    if get_units_number(11, bef_obs, index) > get_units_number(12, bef_obs,index):
+                        outcomes.append(1)
+                    else:
+                        outcomes.append(0)
 
         rewards[step], next_done = rs.view(-1), torch.Tensor(ds).to(device)
+    if len(outcomes)>0:
+        outcomes_record.append(sum(outcomes)/len(outcomes))
+        rewards_record.append(sum(step_rewards)/len(step_rewards))
 
     with torch.no_grad():
         last_value = worker.get_value(obs[-1].to(device)).reshape(1, -1)
@@ -198,7 +206,7 @@ for update in range(starting_update, num_updates + 1):
                 returns[t] = rewards[t] + gamma * next_non_terminal * next_return
                 advantages = returns - values
 
-    b_obs = obs.reshape((-1,) + (54,))
+    b_obs = obs.reshape((-1,) + (80,))
     b_log_probs = log_probs.reshape(-1)
     b_actions = actions.reshape((-1,) + envs.action_space.shape)
     b_selected_units = all_selected_units.reshape((-1,) + (size*size,))
@@ -258,9 +266,9 @@ for update in range(starting_update, num_updates + 1):
 
     if update % 64 == 0:
         date = time.strftime("%Y%m%d%H", time.localtime())
-        path = './model/microrts_ppo_' + date + '_16_worker.pth'
-        path_pt = './model/microrts_ppo_' + date + '_16_worker.pt'
-        record_path = './record/microrts_ppo_' + date + '_16.txt'
+        path = './model/microrts_GNN_ppo_' + date + '_worker.pth'
+        path_pt = './model/microrts_GNN_ppo_' + date + '_worker.pt'
+        record_path = './record/microrts_GNN_ppo_' + date + '.txt'
         torch.save(worker, path)
         torch.save(worker.state_dict(), path_pt)
         with open(record_path, "w") as f:
@@ -268,6 +276,6 @@ for update in range(starting_update, num_updates + 1):
             f.write("\r\n")
             f.write(str(outcomes_record))
 
-    if (time.time() - start_time) > 48 * 60 * 60:
+    if (time.time() - start_time) > 240 * 60 * 60:
         print('all game: ' + str(update))
         break

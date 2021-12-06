@@ -65,6 +65,7 @@ def init_seeds(torch_seed=0, seed=0):
         torch.backends.cudnn.benchmark = False
 
 
+load = False
 test_ai = False
 use_gpu = True
 seed = 0
@@ -73,7 +74,7 @@ torch_seeds = 0
 gamma = 0.99
 learning_rate = 2.5e-4
 num_steps = 1024
-total_steps = 128000000
+total_steps = 32000000
 n_minibatch = 4
 anneal = True
 manager_learn = True
@@ -93,11 +94,11 @@ minibatch_size = int(batch_size // n_minibatch)
 
 device = torch.device('cuda:0' if torch.cuda.is_available() and use_gpu else 'cpu')
 date = time.strftime("%Y%m%d%H", time.localtime())
-path = './model/microrts_fun_'+date+'_16_worker.pth'
-path_pt = './model/microrts_fun_'+date+'_16_worker.pt'
-record_path = './record/microrts_fun_'+date+'_16.txt'
-path_hp = './model/microrts_fun_'+date+'_16_worker_hp.pth'
-path_pt_hp = './model/microrts_fun_'+date+'_16_worker_hp.pt'
+path = './model/microrts_fun_'+date+'_worker.pth'
+path_pt = './model/microrts_fun_'+date+'_worker.pt'
+record_path = './record/microrts_fun_'+date+'.txt'
+path_hp = './model/microrts_fun_'+date+'_worker_hp.pth'
+path_pt_hp = './model/microrts_fun_'+date+'_worker_hp.pt'
 
 random.seed(seed)
 np.random.seed(seed)
@@ -123,6 +124,8 @@ envs = VecMonitor(envs)
 envs = VecPyTorch(envs, device)
 
 worker = Worker(envs).to(device)
+if load:
+    worker.load_state_dict(torch.load(" ", map_location=device))
 
 global_step = 0
 start_time = time.time()
@@ -166,7 +169,6 @@ for update in range(starting_update, num_updates + 1):
             values[step] = worker.get_value(obs[step]).flatten()
 
             action, log_prob, _, invalid_action_masks[step] = worker.get_action(obs[step], num_envs, envs=envs)
-            print(action[0])
             actions[step] = action.T
             log_probs[step] = log_prob
             next_obs, rs, ds, infos = envs.step(action.T)
@@ -185,7 +187,6 @@ for update in range(starting_update, num_updates + 1):
             torch.save(worker, path_hp)
             torch.save(worker.state_dict(), path_pt_hp)
             hp_outcome = average_outcomes
-            print(hp_outcome)
         outcomes_record.append(sum(outcomes) / len(outcomes))
         rewards_record.append(sum(step_rewards) / len(step_rewards))
 
@@ -275,9 +276,9 @@ for update in range(starting_update, num_updates + 1):
 
     if update % 64 == 0:
         date = time.strftime("%Y%m%d%H", time.localtime())
-        path = './model/microrts_ppo_' + date + '_16_worker.pth'
-        path_pt = './model/microrts_ppo_' + date + '_16_worker.pt'
-        record_path = './record/microrts_ppo_' + date + '_16.txt'
+        path = './model/microrts_ppo_' + date + '_worker.pth'
+        path_pt = './model/microrts_ppo_' + date + '_worker.pt'
+        record_path = './record/microrts_ppo_' + date + '.txt'
         torch.save(worker, path)
         torch.save(worker.state_dict(), path_pt)
         with open(record_path, "w") as f:

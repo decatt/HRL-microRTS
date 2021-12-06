@@ -159,3 +159,40 @@ class ManagerScript():
         return goals
 """
 
+
+class ScriptManager(nn.Module):
+    def __init__(self):
+        super(ScriptManager, self).__init__()
+        self.network = nn.Sequential(
+            layer_init(nn.Conv2d(27, 16, kernel_size=(3, 3), stride=(2, 2))),
+            nn.ReLU(),
+            layer_init(nn.Conv2d(16, 32, kernel_size=(2, 2))),
+            nn.ReLU(),
+            nn.Flatten(),
+            layer_init(nn.Linear(32 * 6 * 6, 256)),
+            nn.ReLU(),
+        )
+        self.actor = layer_init(nn.Linear(256, 512), std=1)
+        self.critic = layer_init(nn.Linear(256, 1), std=1)
+
+    def forward(self, x):
+        return self.network(x.permute((0, 3, 1, 2)))
+
+    def get_goal(self, x, source_unit_mask, action=None):
+        logits = self.actor(self.forward(x))
+        split_logits = torch.split(logits, [256, 256], dim=1)
+        unit_mask = torch.split(source_unit_mask, [256, 256], dim=1)
+        if action is None:
+            multi_categoricals = [CategoricalMasked(logits=split_logits[0], masks=unit_mask[0])]+[CategoricalMasked(logits=split_logits[1], masks=unit_mask[1])]
+            action_components = [categorical.sample() for categorical in multi_categoricals]
+            action = torch.stack(action_components)
+        else:
+            split_invalid_action_masks = torch.split(source_unit_mask, [256, 256], dim=1)
+            multi_categoricals = [CategoricalMasked(logits=logits, masks=iam) for (logits, iam) in
+                                  zip(split_logits, split_invalid_action_masks)]
+        log_prob = torch.stack([categorical.log_prob(a) for a, categorical in zip(action, multi_categoricals)])
+        entropy = torch.stack([categorical.entropy() for categorical in multi_categoricals])
+        return action, log_prob.sum(0), entropy.sum(0), source_unit_mask
+
+    def get_value(self, x):
+        return self.critic(self.forward(x))

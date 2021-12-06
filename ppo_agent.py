@@ -23,7 +23,7 @@ class Worker(nn.Module):
             nn.ReLU(),
             nn.Flatten(),
             layer_init(nn.Linear(32 * 6 * 6, 256)),
-            # layer_init(nn.Linear(32 * 3 * 3, 256)),
+            #layer_init(nn.Linear(32 * 3 * 3, 256)),
             nn.ReLU(), )
 
         self.actor = layer_init(nn.Linear(256, envs.action_space.nvec.sum()), std=0.01)
